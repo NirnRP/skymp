@@ -1,0 +1,116 @@
+.housing-menu {
+  position: fixed;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%);
+  z-index: 12010;
+  min-width: 420px;
+  max-width: 700px;
+  max-height: 78vh;
+  overflow: auto;
+  padding: 16px;
+  background: rgba(12, 14, 18, 0.94);
+  border: 1px solid rgba(200, 170, 90, 0.45);
+  border-radius: 8px;
+  color: #e8e0d0;
+  font-family: 'Futura Condensed', 'Segoe UI', sans-serif;
+}
+
+.housing-menu__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 12px;
+  font-size: 20px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: #d4b86a;
+}
+
+.housing-menu__close {
+  background: transparent;
+  border: none;
+  color: #c9b080;
+  font-size: 24px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.housing-menu__error,
+.housing-menu__status {
+  margin-bottom: 8px;
+  padding: 8px 10px;
+  border-radius: 4px;
+  font-size: 14px;
+}
+
+.housing-menu__error {
+  background: rgba(120, 40, 40, 0.45);
+}
+
+.housing-menu__status {
+  background: rgba(80, 60, 20, 0.35);
+}
+
+.housing-menu__meta {
+  margin-bottom: 10px;
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px 12px;
+  font-size: 13px;
+}
+
+.housing-menu__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-bottom: 12px;
+}
+
+.housing-menu__actions button,
+.housing-menu__row button {
+  border: 1px solid rgba(180, 150, 80, 0.35);
+  background: rgba(40, 44, 52, 0.9);
+  color: inherit;
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.housing-menu__lists {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.housing-menu__list {
+  background: rgba(30, 36, 48, 0.75);
+  border-radius: 6px;
+  padding: 10px;
+}
+
+.housing-menu__list-title {
+  margin-bottom: 8px;
+  color: #d4b86a;
+  text-transform: uppercase;
+  font-size: 13px;
+}
+
+.housing-menu__row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-bottom: 8px;
+  font-size: 13px;
+}
+
+.housing-menu__row-buttons {
+  display: flex;
+  gap: 6px;
+}
+
+.housing-menu__muted {
+  opacity: 0.65;
+  font-size: 13px;
+}

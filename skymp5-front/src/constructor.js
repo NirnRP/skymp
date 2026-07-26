@@ -11,8 +11,11 @@ import Icon from './constructorComponents/icon';
 import CheckBox from './constructorComponents/checkbox';
 import Text from './constructorComponents/text';
 import Chat from './constructorComponents/chat';
-import SkillsMenu from './features/skillsMenu';
-import TestMenu from './features/testMenu';
+import SkillMenuPanel from './constructorComponents/skillMenu';
+import HousingMenuPanel from './constructorComponents/housingMenu';
+import AdminPanel from './constructorComponents/adminPanel';
+import ItemTransferPanel from './constructorComponents/itemTransfer';
+import AnimWheelPanel from './constructorComponents/animWheel';
 
 const styles = [
   'BUTTON_STYLE_GITHUB',
@@ -206,12 +209,18 @@ const Constructor = props => {
       );
     case 'chat':
       return (
-        <>
-        <SkillsMenu send={rend.send}/>
         <Chat messages={rend.messages} send={rend.send} placeholder={rend.placeholder} isInputHidden={rend.isInputHidden} />
-        <TestMenu send={rend.send}/>
-        </>
       );
+    case 'skillMenuPanel':
+      return <SkillMenuPanel data={rend.data} />;
+    case 'housingMenuPanel':
+      return <HousingMenuPanel data={rend.data} />;
+    case 'adminPanel':
+      return <AdminPanel data={rend.data} />;
+    case 'itemTransferPanel':
+      return <ItemTransferPanel data={rend.data} />;
+    case 'animWheelPanel':
+      return <AnimWheelPanel data={rend.data} />;
     default:
       break;
   }

@@ -2,11 +2,21 @@
 #include "CallNativeApi.h"
 #include "ConsoleApi.h"
 #include "ExceptionPrinter.h"
+#include "HorsePhysicsBlock.h"
 #include "NullPointerException.h"
 
 #include <RE/B/BSPointerHandle.h>
+#include <RE/E/ExtraInteraction.h>
+#include <RE/M/MemoryManager.h>
 #include <RE/N/NiPoint3.h>
+#include <RE/Offsets_VTABLE.h>
+#include <RE/R/RefrInteraction.h>
 #include <REL/Relocation.h>
+#include <algorithm>
+#include <cstring>
+#include <fstream>
+#include <mutex>
+#include <spdlog/spdlog.h>
 
 extern CallNativeApi::NativeCallRequirements g_nativeCallRequirements;
 
@@ -29,6 +39,51 @@ struct
   std::vector<std::shared_ptr<RE::BSTArray<RE::TintMask*>>> actorsTints;
   std::recursive_mutex m;
 } share2;
+
+std::atomic<bool> mountCollisionGuardEnabled = false;
+constexpr int MOUNT_GUARD_FRAMES = 90;
+struct MountGuardPair
+{
+  uint32_t riderId = 0;
+  uint32_t mountId = 0;
+  int framesLeft = 0;
+};
+struct
+{
+  std::vector<MountGuardPair> pairs;
+  std::mutex m;
+} mountGuard;
+
+namespace {
+
+void ApplyNoCharCollisions(RE::Actor* a)
+{
+  if (!a) {
+    return;
+  }
+  if (auto cc = a->GetCharController()) {
+    cc->flags.set(RE::CHARACTER_FLAGS::kNoCharacterCollisions);
+    float* sv = reinterpret_cast<float*>(&cc->surfaceInfo.surfaceVelocity.quad);
+    sv[0] = 0.f;
+    sv[1] = 0.f;
+    sv[2] = 0.f;
+  }
+}
+
+void ResetNoCharCollisions(RE::Actor* a)
+{
+  if (!a) {
+    return;
+  }
+
+  if (a == RE::PlayerCharacter::GetSingleton()) {
+    return;
+  }
+  if (auto cc = a->GetCharController()) {
+    cc->flags.reset(RE::CHARACTER_FLAGS::kNoCharacterCollisions);
+  }
+}
+}
 
 namespace {
 template <class T>
@@ -177,6 +232,261 @@ void TESModPlatform::SetWeaponDrawnMode(IVM* vm, StackID stackId,
 
   std::lock_guard l(share.m);
   share.weapDrawnMode[actor->formID] = weapDrawnMode;
+}
+
+void TESModPlatform::MountActor(IVM* vm, StackID stackId,
+                                RE::StaticFunctionTag*, RE::Actor* rider,
+                                RE::Actor* mount)
+{
+  if (!rider || !mount) {
+    return;
+  }
+
+  if (!g_nativeCallRequirements.gameThrQ) {
+    return;
+  }
+
+  const auto riderId = rider->formID;
+  const auto mountId = mount->formID;
+
+  g_nativeCallRequirements.gameThrQ->AddTask([=](Viet::Void) {
+    auto r = RE::TESForm::LookupByID<RE::Actor>(riderId);
+    auto m = RE::TESForm::LookupByID<RE::Actor>(mountId);
+    if (!r || !m) {
+      return;
+    }
+
+    if (r->IsOnMount()) {
+      return;
+    }
+
+    if (mountCollisionGuardEnabled) {
+      ApplyNoCharCollisions(r);
+      ApplyNoCharCollisions(m);
+      std::lock_guard l(mountGuard.m);
+      auto& pairs = mountGuard.pairs;
+      const auto it = std::find_if(
+        pairs.begin(), pairs.end(),
+        [&](const MountGuardPair& p) { return p.riderId == riderId; });
+      if (it != pairs.end()) {
+        it->mountId = mountId;
+        it->framesLeft = MOUNT_GUARD_FRAMES;
+      } else {
+        pairs.push_back({ riderId, mountId, MOUNT_GUARD_FRAMES });
+      }
+    }
+
+    if (REL::Module::IsAE()) {
+      using PrepareMount_t = bool (*)(RE::Actor*, RE::Actor*);
+      static const REL::Relocation<PrepareMount_t> prepareMount{ REL::ID(41303) };
+      const std::uintptr_t vtMi = RE::VTABLE_MountInteraction[0].address();
+      const std::uintptr_t vtEi = RE::VTABLE_ExtraInteraction[0].address();
+      const bool prep = prepareMount(r, m);
+      {
+        std::ofstream f("Data/Platform/mount-native-diag.log", std::ios::app);
+        if (f) {
+          f << "[mount-native] AE prep=" << (prep ? 1 : 0)
+            << " onMountBefore=" << (r->IsOnMount() ? 1 : 0) << std::hex
+            << " prepAddr=" << prepareMount.address() << " vtMi=" << vtMi
+            << " vtEi=" << vtEi << "\n";
+        }
+      }
+
+      if (auto* mi = static_cast<RE::RefrInteraction*>(RE::malloc(0x38))) {
+        std::memset(mi, 0, 0x38);
+        *reinterpret_cast<std::uintptr_t*>(mi) = vtMi;
+        reinterpret_cast<std::uint32_t*>(mi)[2] = 1;
+        *reinterpret_cast<std::uint32_t*>(reinterpret_cast<char*>(mi) + 0x10) =
+          m->CreateRefHandle().native_handle();
+        *reinterpret_cast<std::uint32_t*>(reinterpret_cast<char*>(mi) + 0x14) =
+          r->CreateRefHandle().native_handle();
+
+        if (auto* ei = static_cast<RE::ExtraInteraction*>(RE::malloc(0x18))) {
+          std::memset(ei, 0, 0x18);
+          *reinterpret_cast<std::uintptr_t*>(ei) = vtEi;
+          reinterpret_cast<std::uint32_t*>(mi)[2] += 1;
+          *reinterpret_cast<RE::RefrInteraction**>(reinterpret_cast<char*>(ei) + 0x10) =
+            mi;
+          r->extraList.Add(ei);
+        }
+      }
+      r->PutActorOnMountQuick();
+      {
+        std::ofstream f("Data/Platform/mount-native-diag.log", std::ios::app);
+        if (f) {
+          f << "[mount-native] AE done onMountAfter=" << (r->IsOnMount() ? 1 : 0)
+            << " getMountNull=" << ([&] {
+                 RE::NiPointer<RE::Actor> mm;
+                 return r->GetMount(mm) ? 0 : 1;
+               }())
+            << "\n";
+        }
+      }
+      return;
+    }
+
+    r->SetLastRiddenMount(m->GetHandle());
+    r->PutActorOnMountQuick();
+  });
+}
+
+void TESModPlatform::InitiateMountPackage(IVM* vm, StackID stackId,
+                                          RE::StaticFunctionTag*,
+                                          RE::Actor* rider, RE::Actor* mount)
+{
+  if (!rider || !mount) {
+    return;
+  }
+
+  if (!g_nativeCallRequirements.gameThrQ) {
+    return;
+  }
+
+  const auto riderId = rider->formID;
+  const auto mountId = mount->formID;
+
+  g_nativeCallRequirements.gameThrQ->AddTask([=](Viet::Void) {
+    auto r = RE::TESForm::LookupByID<RE::Actor>(riderId);
+    auto m = RE::TESForm::LookupByID<RE::Actor>(mountId);
+    if (!r || !m) {
+      return;
+    }
+
+    if (r->IsOnMount()) {
+      return;
+    }
+
+    if (!REL::Module::IsAE()) {
+      return;
+    }
+    using InitiateMountPackage_t = bool (*)(RE::Actor*, RE::Actor*);
+    static const REL::Relocation<InitiateMountPackage_t> initiateMountPackage{
+      REL::ID(37905)
+    };
+    const bool ok = initiateMountPackage(r, m);
+    std::ofstream f("Data/Platform/mount-native-diag.log", std::ios::app);
+    if (f) {
+      f << "[mount-native] pkg ok=" << (ok ? 1 : 0) << std::hex
+        << " rider=" << riderId << " mount=" << mountId
+        << " addr=" << initiateMountPackage.address() << std::dec << "\n";
+    }
+  });
+}
+
+void TESModPlatform::ForcePositionSynced(IVM* vm, StackID stackId,
+                                         RE::StaticFunctionTag*,
+                                         RE::Actor* actor, float x, float y,
+                                         float z)
+{
+  if (!actor) {
+    return;
+  }
+
+  if (!g_nativeCallRequirements.gameThrQ) {
+    return;
+  }
+
+  const auto actorId = actor->formID;
+
+  g_nativeCallRequirements.gameThrQ->AddTask([=](Viet::Void) {
+    auto a = RE::TESForm::LookupByID<RE::Actor>(actorId);
+    if (!a) {
+      return;
+    }
+
+    a->SetPosition(RE::NiPoint3(x, y, z), true);
+
+    if (auto cc = a->GetCharController()) {
+      RE::hkVector4 zero;
+      std::memset(&zero, 0, sizeof(zero));
+      cc->SetLinearVelocityImpl(zero);
+      float* sv = reinterpret_cast<float*>(&cc->surfaceInfo.surfaceVelocity.quad);
+      sv[0] = 0.f;
+      sv[1] = 0.f;
+      sv[2] = 0.f;
+    }
+  });
+}
+
+void TESModPlatform::SetMountCollisionGuard(IVM* vm, StackID stackId,
+                                            RE::StaticFunctionTag*,
+                                            bool enabled)
+{
+  mountCollisionGuardEnabled = enabled;
+}
+
+void TESModPlatform::SetPhysicsBlockEnabled(IVM* vm, StackID stackId,
+                                            RE::StaticFunctionTag*, bool enabled)
+{
+  HorsePhysicsBlock::SetEnabled(enabled);
+}
+
+void TESModPlatform::AddPhysicsBlockedActor(IVM* vm, StackID stackId,
+                                            RE::StaticFunctionTag*,
+                                            RE::Actor* actor)
+{
+  if (actor) {
+    HorsePhysicsBlock::Add(actor->formID);
+  }
+}
+
+void TESModPlatform::RemovePhysicsBlockedActor(IVM* vm, StackID stackId,
+                                               RE::StaticFunctionTag*,
+                                               RE::Actor* actor)
+{
+  if (actor) {
+    HorsePhysicsBlock::Remove(actor->formID);
+  }
+}
+
+void TESModPlatform::RefreshMountCollisionGuard()
+{
+  std::lock_guard l(mountGuard.m);
+  auto& pairs = mountGuard.pairs;
+
+  if (!mountCollisionGuardEnabled) {
+
+    for (auto& p : pairs) {
+      ResetNoCharCollisions(RE::TESForm::LookupByID<RE::Actor>(p.riderId));
+      ResetNoCharCollisions(RE::TESForm::LookupByID<RE::Actor>(p.mountId));
+    }
+    pairs.clear();
+    return;
+  }
+
+  for (auto it = pairs.begin(); it != pairs.end();) {
+    auto r = RE::TESForm::LookupByID<RE::Actor>(it->riderId);
+    auto m = RE::TESForm::LookupByID<RE::Actor>(it->mountId);
+    if (!r && !m) {
+      it = pairs.erase(it);
+      continue;
+    }
+    it->framesLeft--;
+    if (it->framesLeft <= 0) {
+      ResetNoCharCollisions(r);
+      ResetNoCharCollisions(m);
+      it = pairs.erase(it);
+      continue;
+    }
+
+    ApplyNoCharCollisions(r);
+    ApplyNoCharCollisions(m);
+    ++it;
+  }
+}
+
+RE::Actor* TESModPlatform::GetMount(IVM* vm, StackID stackId,
+                                    RE::StaticFunctionTag*, RE::Actor* rider)
+{
+  if (!rider) {
+    return nullptr;
+  }
+
+  RE::NiPointer<RE::Actor> mount;
+  if (!rider->GetMount(mount)) {
+    return nullptr;
+  }
+  return mount.get();
 }
 
 int32_t TESModPlatform::GetNthVtableElement(IVM* vm, StackID stackId,
@@ -1010,6 +1320,49 @@ bool TESModPlatform::Register(IVM* vm)
     new RE::BSScript::NativeFunction<true, decltype(SetWeaponDrawnMode), void,
                                      RE::StaticFunctionTag*, RE::Actor*, int>(
       "SetWeaponDrawnMode", "TESModPlatform", SetWeaponDrawnMode));
+
+  vm->BindNativeMethod(
+    new RE::BSScript::NativeFunction<true, decltype(MountActor), void,
+                                     RE::StaticFunctionTag*, RE::Actor*,
+                                     RE::Actor*>("MountActor", "TESModPlatform",
+                                                 MountActor));
+
+  vm->BindNativeMethod(
+    new RE::BSScript::NativeFunction<true, decltype(InitiateMountPackage),
+                                     void, RE::StaticFunctionTag*, RE::Actor*,
+                                     RE::Actor*>(
+      "InitiateMountPackage", "TESModPlatform", InitiateMountPackage));
+
+  vm->BindNativeMethod(
+    new RE::BSScript::NativeFunction<true, decltype(ForcePositionSynced), void,
+                                     RE::StaticFunctionTag*, RE::Actor*, float,
+                                     float, float>(
+      "ForcePositionSynced", "TESModPlatform", ForcePositionSynced));
+
+  vm->BindNativeMethod(
+    new RE::BSScript::NativeFunction<true, decltype(SetMountCollisionGuard),
+                                     void, RE::StaticFunctionTag*, bool>(
+      "SetMountCollisionGuard", "TESModPlatform", SetMountCollisionGuard));
+
+  vm->BindNativeMethod(
+    new RE::BSScript::NativeFunction<true, decltype(SetPhysicsBlockEnabled),
+                                     void, RE::StaticFunctionTag*, bool>(
+      "SetPhysicsBlockEnabled", "TESModPlatform", SetPhysicsBlockEnabled));
+
+  vm->BindNativeMethod(
+    new RE::BSScript::NativeFunction<true, decltype(AddPhysicsBlockedActor),
+                                     void, RE::StaticFunctionTag*, RE::Actor*>(
+      "AddPhysicsBlockedActor", "TESModPlatform", AddPhysicsBlockedActor));
+
+  vm->BindNativeMethod(
+    new RE::BSScript::NativeFunction<true, decltype(RemovePhysicsBlockedActor),
+                                     void, RE::StaticFunctionTag*, RE::Actor*>(
+      "RemovePhysicsBlockedActor", "TESModPlatform", RemovePhysicsBlockedActor));
+
+  vm->BindNativeMethod(
+    new RE::BSScript::NativeFunction<true, decltype(GetMount), RE::Actor*,
+                                     RE::StaticFunctionTag*, RE::Actor*>(
+      "GetMount", "TESModPlatform", GetMount));
 
   vm->BindNativeMethod(
     new RE::BSScript::NativeFunction<true, decltype(GetNthVtableElement),

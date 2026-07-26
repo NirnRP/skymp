@@ -3,6 +3,9 @@
 #include "JsUtils.h"
 #include "SkyrimPlatform.h"
 
+#include <chrono>
+#include <fstream>
+
 #include "Magic/AnimationGraphMasterBehaviourDescriptor.h"
 
 extern CallNativeApi::NativeCallRequirements g_nativeCallRequirements;
@@ -221,6 +224,43 @@ Napi::Value MagicApi::GetAnimationVariablesFromActor(
   return obj;
 }
 
+namespace {
+
+bool HorseGuardBlock(RE::Actor* pActor, const char* fn)
+{
+  if (!pActor) {
+    return false;
+  }
+  bool isHorse = false;
+  if (auto race = pActor->GetRace()) {
+    const uint32_t raceLocal = race->formID & 0x00FFFFFF;
+    isHorse = raceLocal == 0x131FD || raceLocal == 0xDE505;
+  }
+  bool isMount = false;
+  if (auto pc = RE::PlayerCharacter::GetSingleton()) {
+    RE::NiPointer<RE::Actor> mount;
+    if (pc->GetMount(mount) && mount && mount.get() == pActor) {
+      isMount = true;
+    }
+  }
+  if (!isHorse && !isMount) {
+    return false;
+  }
+
+  static std::ofstream horseGuardLog;
+  if (horseGuardLog.is_open()) {
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+    horseGuardLog << nowMs << " BLOCKED-" << fn << " target=" << std::hex
+                  << pActor->formID << std::dec << " horse=" << isHorse
+                  << " mount=" << isMount << "\n";
+    horseGuardLog.flush();
+  }
+  return true;
+}
+}
+
 Napi::Value MagicApi::ApplyAnimationVariablesToActor(
   const Napi::CallbackInfo& info)
 {
@@ -229,6 +269,10 @@ Napi::Value MagicApi::ApplyAnimationVariablesToActor(
   const auto pActor = RE::TESForm::LookupByID<RE::Actor>(actorFormId);
 
   if (!pActor) {
+    return Napi::Boolean::New(info.Env(), false);
+  }
+
+  if (HorseGuardBlock(pActor, "AnimVars")) {
     return Napi::Boolean::New(info.Env(), false);
   }
 

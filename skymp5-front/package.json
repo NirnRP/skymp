@@ -5,6 +5,7 @@
   "main": "index.js",
   "scripts": {
     "build": "webpack --config webpack.config.ts",
+    "build:housing-addon": "webpack --config webpack.housing-addon.config.js",
     "watch": "webpack serve",
     "lint": "eslint src --ext .ts",
     "lint:fix": "yarn lint --fix",

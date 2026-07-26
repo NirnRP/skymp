@@ -143,11 +143,15 @@ if(NOT "${SKIP_SKYRIM_PLATFORM_BUILDING}")
     set(DEPENDENCIES_FOR_CUSTOM_TARGETS skyrim_platform SkyrimPlatformCEF skyrim_platform_entry)
 
     if(BUILD_SCRIPTS)
+      set(_papyrus_compiler "${SKYRIM_DIR}/Papyrus compiler/PapyrusCompiler.exe")
+      if(NOT EXISTS "${_papyrus_compiler}")
+        set(_papyrus_compiler "${CMAKE_SOURCE_DIR}/skyrim-platform/tools/papyrus-compiler/papyrus-compiler/Original Compiler/PapyrusCompiler.exe")
+      endif()
       add_papyrus_library_ck(
         NAME TESModPlatformPsc
         DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/psc"
         OUTPUT_DIR "${CMAKE_CURRENT_SOURCE_DIR}/pex"
-        COMPILER_EXECUTABLE_PATH "${SKYRIM_DIR}/Papyrus compiler/PapyrusCompiler.exe"
+        COMPILER_EXECUTABLE_PATH "${_papyrus_compiler}"
       )
     endif()
     if(TARGET TESModPlatformPsc)

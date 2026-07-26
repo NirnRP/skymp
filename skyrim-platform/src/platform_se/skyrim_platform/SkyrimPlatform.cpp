@@ -1,4 +1,7 @@
 #include "SkyrimPlatform.h"
+#include <chrono>
+#include <cmath>
+#include <fstream>
 #include "BrowserApi.h"    // APIs for register in CommonExecutionListener
 #include "CallNativeApi.h" // CallNativeApi::NativeCallRequirements
 #include "CameraApi.h"
@@ -17,6 +20,7 @@
 #include "LoadGameApi.h"
 #include "MagicApi.h"
 #include "MpClientPluginApi.h"
+#include "CloneAiThrottle.h"
 #include "ObjectReferenceApi.h"
 #include "Sp3Api.h"
 #include "TextApi.h"
@@ -26,6 +30,7 @@
 #include "NapiHelper.h"
 
 #include "IPC.h" // IPC::Call
+#include "PapyrusTESModPlatform.h"
 
 CallNativeApi::NativeCallRequirements g_nativeCallRequirements;
 
@@ -137,12 +142,199 @@ private:
 
   void UpdateImpl(Napi::Env env)
   {
+    HorseDiagSamplePlayer();
+
+    TESModPlatform::RefreshMountCollisionGuard();
     taskQueue.Update(env);
     nativeCallRequirements.jsThrQ->Update(env);
     jsPromiseTaskQueue.Update(env);
     TextApi::OnUpdate();
     EventsApi::SendEvent("update", {});
   }
+
+  void HorseDiagSamplePlayer()
+  {
+
+    static std::ofstream log;
+    auto pc = RE::PlayerCharacter::GetSingleton();
+    if (!pc) {
+      return;
+    }
+    const float x = pc->GetPositionX();
+    const float y = pc->GetPositionY();
+    const float z = pc->GetPositionZ();
+    const int mnt = pc->IsOnMount() ? 1 : 0;
+
+    const auto nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now().time_since_epoch())
+                         .count();
+
+    const float dx = x - lastX;
+    const float dy = y - lastY;
+    const float dz = z - lastZ;
+    const float jump = std::sqrt(dx * dx + dy * dy + dz * dz);
+
+    const int stabFired = 0;
+    (void)stabFrames;
+
+    const bool bigJump = hadLast && jump > 150.f;
+    const bool periodic = nowMs - lastSampleMs >= 250;
+
+    if (bigJump || periodic || stabFired) {
+
+      uint32_t mntId = 0, mntBase = 0;
+
+      float pdx = 0, pdy = 0, pdz = 0, fallT = 0;
+
+      int supState = -1, supDyn = 0;
+      float svz = 0;
+
+      int wantSt = -1;
+      float ccZ = 0, refZ = 0;
+      if (mnt) {
+        RE::NiPointer<RE::Actor> mountDiag;
+        if (pc->GetMount(mountDiag) && mountDiag) {
+          mntId = mountDiag->formID;
+          if (auto b = mountDiag->GetBaseObject()) {
+            mntBase = b->formID;
+          }
+          if (auto cc = mountDiag->GetCharController()) {
+            const float* pd = reinterpret_cast<const float*>(&cc->pushDelta.quad);
+            pdx = pd[0];
+            pdy = pd[1];
+            pdz = pd[2];
+            fallT = cc->fallTime;
+            supState = static_cast<int>(cc->surfaceInfo.supportedState.get());
+            supDyn = cc->surfaceInfo.surfaceIsDynamic ? 1 : 0;
+            const float* sv =
+              reinterpret_cast<const float*>(&cc->surfaceInfo.surfaceVelocity.quad);
+            svz = sv[2];
+            wantSt = static_cast<int>(cc->wantState);
+
+            RE::hkVector4 hpos;
+            cc->GetPositionImpl(hpos, false);
+            const float* hp = reinterpret_cast<const float*>(&hpos.quad);
+            ccZ = hp[2] * 69.99f;
+            refZ = mountDiag->GetPositionZ();
+          }
+        }
+      }
+      log << nowMs
+          << (bigJump ? " JUMP " : (stabFired ? " STAB " : " plr "))
+          << "d=" << (int)jump << " PLR=(" << (int)x << "," << (int)y << ","
+          << (int)z << ") mnt=" << mnt << " dz=" << (int)dz << std::hex
+          << " horse=" << mntId << " horseBase=" << mntBase << std::dec
+          << " pd=(" << (int)(pdx * 100) << "," << (int)(pdy * 100) << ","
+          << (int)(pdz * 100) << ") fall=" << (int)(fallT * 100)
+          << " sup=" << supState << " dyn=" << supDyn
+          << " svz=" << (int)(svz * 100) << " want=" << wantSt
+          << " refZ=" << (int)refZ << " ccZ=" << (int)ccZ
+          << " linV=(" << (int)(lastLinVX * 100) << ","
+          << (int)(lastLinVY * 100) << "," << (int)(lastLinVZ * 100) << ")\n";
+      log.flush();
+      lastSampleMs = nowMs;
+    }
+
+    if (mnt) {
+      RE::NiPointer<RE::Actor> mountFix;
+      if (pc->GetMount(mountFix) && mountFix) {
+        if (auto mcc = mountFix->GetCharController()) {
+          mcc->flags.set(RE::CHARACTER_FLAGS::kNoCharacterCollisions);
+
+          float* sv = reinterpret_cast<float*>(
+            &mcc->surfaceInfo.surfaceVelocity.quad);
+          sv[0] = 0.f;
+          sv[1] = 0.f;
+          sv[2] = 0.f;
+
+          RE::hkVector4 lv;
+          mcc->GetLinearVelocityImpl(lv);
+          float* lvf = reinterpret_cast<float*>(&lv.quad);
+          lastLinVX = lvf[0];
+          lastLinVY = lvf[1];
+          lastLinVZ = lvf[2];
+
+          bool changed = false;
+          if (lvf[2] > 12.f) {
+            lvf[2] = 0.f;
+            changed = true;
+          }
+
+          const bool supported =
+            mcc->surfaceInfo.supportedState.get() ==
+            RE::hkpSurfaceInfo::SupportedState::kSupported;
+          const float hcap = supported ? 16.f : 4.f;
+          const float hmag = std::sqrt(lvf[0] * lvf[0] + lvf[1] * lvf[1]);
+          if (hmag > hcap) {
+            const float s = hcap / hmag;
+            lvf[0] *= s;
+            lvf[1] *= s;
+            changed = true;
+          }
+          if (changed) {
+            mcc->SetLinearVelocityImpl(lv);
+          }
+        }
+      }
+      if (auto pcc = pc->GetCharController()) {
+        pcc->flags.set(RE::CHARACTER_FLAGS::kNoCharacterCollisions);
+        float* psv = reinterpret_cast<float*>(
+          &pcc->surfaceInfo.surfaceVelocity.quad);
+        psv[0] = 0.f;
+        psv[1] = 0.f;
+        psv[2] = 0.f;
+      }
+
+      noCharCollApplied = true;
+    } else if (noCharCollApplied) {
+      if (auto pcc = pc->GetCharController()) {
+        pcc->flags.reset(RE::CHARACTER_FLAGS::kNoCharacterCollisions);
+      }
+      noCharCollApplied = false;
+    }
+
+    lastX = x;
+    lastY = y;
+    lastZ = z;
+    hadLast = true;
+  }
+
+  bool HorseScaleVelocity(RE::PlayerCharacter* pc, float factor)
+  {
+    bool did = false;
+
+    auto scaleOne = [&](RE::Actor* a) {
+      if (!a) {
+        return;
+      }
+      auto cc = a->GetCharController();
+      if (!cc) {
+        return;
+      }
+      RE::hkVector4 v;
+      cc->GetLinearVelocityImpl(v);
+      float* f = reinterpret_cast<float*>(&v.quad);
+      f[0] *= factor;
+      f[1] *= factor;
+      f[2] *= factor;
+      cc->SetLinearVelocityImpl(v);
+      did = true;
+    };
+
+    scaleOne(pc);
+    RE::NiPointer<RE::Actor> mount;
+    if (pc->GetMount(mount) && mount) {
+      scaleOne(mount.get());
+    }
+    return did;
+  }
+
+  float lastX = 0, lastY = 0, lastZ = 0;
+  bool hadLast = false;
+  long long lastSampleMs = 0;
+  int stabFrames = 0;
+  bool noCharCollApplied = false;
+  float lastLinVX = 0, lastLinVY = 0, lastLinVZ = 0;
 
   const std::vector<std::filesystem::path>& GetFileDirs() const
   {
@@ -277,6 +469,8 @@ private:
       CameraApi::Register(env, e);
       MpClientPluginApi::Register(env, e);
       ObjectReferenceApi::Register(env, e);
+
+      CloneAiApi::Register(env, e);
       HttpClientApi::Register(env, e);
       ConsoleApi::Register(env, e);
       DevApi::Register(env, e, {}, GetFileDirs());

@@ -29,6 +29,28 @@ enum
 void SetWeaponDrawnMode(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
                         RE::Actor* actor, int32_t weapDrawnMode);
 
+void MountActor(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
+                RE::Actor* rider, RE::Actor* mount);
+
+void InitiateMountPackage(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
+                          RE::Actor* rider, RE::Actor* mount);
+
+void ForcePositionSynced(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
+                         RE::Actor* actor, float x, float y, float z);
+
+void SetMountCollisionGuard(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
+                            bool enabled);
+
+void SetPhysicsBlockEnabled(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
+                            bool enabled);
+void AddPhysicsBlockedActor(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
+                            RE::Actor* actor);
+void RemovePhysicsBlockedActor(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
+                               RE::Actor* actor);
+
+RE::Actor* GetMount(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
+                    RE::Actor* rider);
+
 int32_t GetNthVtableElement(IVM* vm, StackID stackId, RE::StaticFunctionTag*,
                             RE::TESForm* pointer, int32_t pointerOffset,
                             int32_t elementIndex);
@@ -101,6 +123,8 @@ RE::TESObjectREFR* CreateReferenceAtLocation(
   float posZ, float rotX, float rotY, float rotZ, bool persist);
 
 // Threadsafe
+
+void RefreshMountCollisionGuard();
 void BlockMoveRefrToPosition(bool blocked);
 int GetWeapDrawnMode(uint32_t actorId);
 uint64_t GetNumPapyrusUpdates();

@@ -11,6 +11,9 @@
 
 #include <spdlog/spdlog.h>
 
+#include <chrono>
+#include <fstream>
+
 extern CallNativeApi::NativeCallRequirements g_nativeCallRequirements;
 
 Variable CallNative::AnySafeToVariable(const CallNative::AnySafe& v,
@@ -253,6 +256,60 @@ CallNative::AnySafe CallNative::CallNativeSafe(Arguments& args_)
   if (!funcInfo->IsGlobal()) {
     if (self)
       rawSelf = (RE::TESForm*)self->GetNativeObjectPtr();
+  }
+
+  {
+    const char* fnDiag = classFunc.data();
+    const bool isMoverDiag = !stricmp(fnDiag, "TranslateTo") ||
+      !stricmp(fnDiag, "SetPosition") || !stricmp(fnDiag, "MoveTo") ||
+      !stricmp(fnDiag, "PathToReference") ||
+      !stricmp(fnDiag, "ApplyHavokImpulse") ||
+      !stricmp(fnDiag, "PushActorAway") || !stricmp(fnDiag, "SetAngle") ||
+
+      !stricmp(fnDiag, "SendAnimationEvent") ||
+      !stricmp(fnDiag, "KeepOffsetFromActor") ||
+      !stricmp(fnDiag, "ClearKeepOffsetFromActor") ||
+
+      !stricmp(fnDiag, "MoveRefrToPosition");
+    if (isMoverDiag && rawSelf) {
+      uint32_t baseIdDiag = 0;
+      if (auto refrDiag = rawSelf->As<RE::TESObjectREFR>()) {
+        if (auto baseDiag = refrDiag->GetBaseObject()) {
+          baseIdDiag = baseDiag->formID;
+        }
+      }
+      double a0 = 0, a1 = 0, a2 = 0;
+      if (numArgs >= 1 && std::holds_alternative<double>(args[0]))
+        a0 = std::get<double>(args[0]);
+      if (numArgs >= 2 && std::holds_alternative<double>(args[1]))
+        a1 = std::get<double>(args[1]);
+      if (numArgs >= 3 && std::holds_alternative<double>(args[2]))
+        a2 = std::get<double>(args[2]);
+
+      static std::ofstream g_horseDiagLog;
+
+      int px = 0, py = 0, pz = 0, mnt = 0;
+      if (auto pc = RE::PlayerCharacter::GetSingleton()) {
+        px = static_cast<int>(pc->GetPositionX());
+        py = static_cast<int>(pc->GetPositionY());
+        pz = static_cast<int>(pc->GetPositionZ());
+        mnt = pc->IsOnMount() ? 1 : 0;
+      }
+      if (g_horseDiagLog.is_open()) {
+        const auto nowMs =
+          std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now().time_since_epoch())
+            .count();
+        g_horseDiagLog << nowMs << " " << fnDiag << " self=" << std::hex
+                       << rawSelf->formID << " base=" << baseIdDiag
+                       << std::dec << " args=(" << static_cast<int>(a0) << ","
+                       << static_cast<int>(a1) << ","
+                       << static_cast<int>(a2) << ")"
+                       << " PLR=(" << px << "," << py << "," << pz
+                       << ") mnt=" << mnt << "\n";
+        g_horseDiagLog.flush();
+      }
+    }
   }
 
   if (rawSelf && funcInfo->IsGlobal()) {

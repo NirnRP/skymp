@@ -6,6 +6,22 @@ Int function Add(Int a1, Int a2, Int a3, Int a4, Int a5, Int a6, Int a7, Int a8,
 
 function SetWeaponDrawnMode(Actor actor, Int mode) global native
 
+function MountActor(Actor rider, Actor mount) global native
+
+function InitiateMountPackage(Actor rider, Actor mount) global native
+
+function ForcePositionSynced(Actor actor, Float x, Float y, Float z) global native
+
+function SetMountCollisionGuard(Bool enabled) global native
+
+function SetPhysicsBlockEnabled(Bool enabled) global native
+
+function AddPhysicsBlockedActor(Actor horse) global native
+
+function RemovePhysicsBlockedActor(Actor horse) global native
+
+Actor function GetMount(Actor rider) global native
+
 Int function GetNthVtableElement(Form pointer, Int pointerOffset, Int elementIndex) global native
 
 Bool Function IsPlayerRunningEnabled() global native

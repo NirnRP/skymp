@@ -43,21 +43,22 @@ class App extends React.Component {
     window.addEventListener('mousemove', this.onMoveWindow);
     window.addEventListener('mouseup', this.onMouseUp);
 
-    window.skyrimPlatform.widgets.addListener(this.handleWidgetUpdate.bind(this));
+    this.onWidgetUpdate = this.handleWidgetUpdate.bind(this);
+    this.onPanelsChanged = this.handleWidgetUpdate.bind(this);
+    window.skyrimPlatform.widgets.addListener(this.onWidgetUpdate);
+    window.addEventListener('cefPanelsChanged', this.onPanelsChanged);
   }
 
   handleWidgetUpdate(newWidgets) {
-    this.setState({
-      ...this.state,
-      widgets: newWidgets
-    });
+    this.setState({ widgets: newWidgets });
   }
 
   componentWillUnmount() {
     window.removeEventListener('focus', this.onWindowFocus.bind(this));
     window.removeEventListener('blur', this.onWindowFocus.bind(this));
     window.addEventListener('mousemove', this.onMoveWindow);
-    window.skyrimPlatform.widgets.removeListener(this.handleWidgetUpdate.bind(this));
+    window.skyrimPlatform.widgets.removeListener(this.onWidgetUpdate);
+    window.removeEventListener('cefPanelsChanged', this.onPanelsChanged);
   }
 
   onWindowFocus(e) {
@@ -91,7 +92,15 @@ class App extends React.Component {
         <div style={{ position: 'static' }}>
           {this.state.widgets.map((widget, index) =>
             <Constructor
-              key={index.toString() + widget.type + ((widget.type === 'form') ? widget.elements + widget.caption : 'chat')}
+              key={
+                index.toString() +
+                widget.type +
+                (widget.type === 'form'
+                  ? widget.elements + widget.caption
+                  : widget.type === 'chat'
+                    ? 'chat'
+                    : String((widget.data && widget.data.seq) || 0))
+              }
               dynamicSize={true}
               elem={widget}
               height={this.props.height || 704}
